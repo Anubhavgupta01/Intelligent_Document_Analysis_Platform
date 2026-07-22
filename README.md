@@ -1,4 +1,4 @@
-# GenAI Research Assistant for Teams
+# Intelligent Document Analysis Platform
 
 **🏆 Sponsor Track Qualifications:**
 - ✅ **Meta Sponsor Track**: Uses Meta LLaMA 3.1-8B-Instruct model
