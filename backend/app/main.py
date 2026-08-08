@@ -1,8 +1,13 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File, Form, HTTPException
 from typing import Optional
 import uuid
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -11,8 +16,11 @@ from docx import Document
 from .deps import summarize_text, answer_question, generate_key_points, generate_action_tasks
 from .rag import InMemoryRAGIndex
 from .models import generate_chat_response
+from .auth import auth_router, get_current_user
 
-app = FastAPI(title="GenAI Research Assistant API")
+app = FastAPI(title="Intelligent Document Analysis Platform API")
+# Include authentication router
+app.include_router(auth_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +31,8 @@ app.add_middleware(
 )
 
 # Simple in-memory document/text store and RAG index
-DOCUMENTS: dict[str, str] = {}
+# Each entry: {"user_id": str, "text": str}
+DOCUMENTS: dict[str, dict] = {}
 RAG = InMemoryRAGIndex()
 
 
@@ -45,6 +54,7 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    document_id: Optional[str] = None
     history: list[ChatMessage] = []
 
 
@@ -58,7 +68,7 @@ async def health():
 
 
 @app.post("/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), _current_user: dict = Depends(get_current_user)):
     try:
         content_type = file.content_type or ""
         text = ""
@@ -98,7 +108,7 @@ async def upload(file: UploadFile = File(...)):
 
 
 @app.post("/summarize")
-async def summarize(json: Optional[SummarizeRequest] = None, document_id: Optional[str] = Form(None), text: Optional[str] = Form(None)):
+async def summarize(json: Optional[SummarizeRequest] = None, document_id: Optional[str] = Form(None), text: Optional[str] = Form(None), _current_user: dict = Depends(get_current_user)):
     # Prefer JSON body when provided
     if json is not None:
         if not json.document_id and not json.text:
@@ -125,7 +135,7 @@ async def summarize(json: Optional[SummarizeRequest] = None, document_id: Option
 
 
 @app.post("/qa")
-async def qa(json: Optional[QARequest] = None, question: Optional[str] = Form(None), document_id: Optional[str] = Form(None), context: Optional[str] = Form(None)):
+async def qa(json: Optional[QARequest] = None, question: Optional[str] = Form(None), document_id: Optional[str] = Form(None), context: Optional[str] = Form(None), _current_user: dict = Depends(get_current_user)):
     if json is not None:
         if not json.document_id and not (json.context or ""):
             raise HTTPException(status_code=400, detail="Provide document_id or context")
@@ -164,7 +174,7 @@ async def qa(json: Optional[QARequest] = None, question: Optional[str] = Form(No
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, _current_user: dict = Depends(get_current_user)):
     """
     Chat endpoint using Meta LLaMA 3.1-8B-Instruct
     Accepts a message and conversation history, returns AI response
@@ -174,9 +184,20 @@ async def chat(request: ChatRequest):
         messages = []
         
         # Add system message for context
+        # Get uploaded document
+        document_text = ""
+
+        if request.document_id:
+            document_text = DOCUMENTS.get(request.document_id, "")
+
         messages.append({
             "role": "system",
-            "content": "You are a helpful AI research assistant. You provide accurate, helpful, and concise responses. You can help with research, analysis, summarization, and answering questions."
+            "content": f"""
+            You are a helpful AI research assistant.
+            Answer the user's questions using the uploaded document below.
+            Document:
+            {document_text}
+            """
         })
         
         # Add conversation history

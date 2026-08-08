@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Docker MCP Gateway",
-    description="Creative container orchestration gateway for GenAI Research Assistant",
+    description="Creative container orchestration gateway for Intelligent Document Analysis Platform",
     version="1.0.0"
 )
 
@@ -84,7 +84,7 @@ async def gateway_info():
     """MCP Gateway information and creative container usage documentation"""
     return {
         "service": "Docker MCP Gateway",
-        "description": "Creative container orchestration for GenAI Research Assistant",
+        "description": "Creative container orchestration for Intelligent Document Analysis Platform",
         "sponsor_track": "Docker",
         "features": [
             "Service Discovery & Health Monitoring",

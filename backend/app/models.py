@@ -78,11 +78,12 @@ class HFInferenceAPI:
                 })
 
             except Exception as e:
-                logger.error(f"HF Inference API error: {e}")
+                import traceback
 
-                results.append({
-                    "generated_text": f"Error generating response via Hugging Face Inference API: {e}"
-                })
+                traceback.print_exc()
+                logger.exception("HF Inference API failed")
+
+                raise  
 
         return results
 
@@ -100,8 +101,10 @@ def get_text_generation_pipeline():
                     logger.info(f"Using Hugging Face Serverless Inference API for model: {model_id}")
                     _model_cache[model_id] = HFInferenceAPI(model_id, hf_token)
                 except Exception as e:
-                    logger.error(f"Failed to initialize Hugging Face Inference API: {e}")
-            
+                    import traceback
+                    traceback.print_exc()
+                    logger.exception("HF Inference API initialization failed")
+                    raise
             if model_id in _model_cache:
                 return _model_cache[model_id]
     
@@ -145,9 +148,12 @@ def get_text_generation_pipeline():
                 logger.info(f"Successfully loaded model locally: {model_id}")
                 
             except Exception as e:
-                logger.error(f"Failed to load model locally {model_id}: {e}")
-                logger.info("Falling back to mock responses")
-                _model_cache[model_id] = MockTextGeneration()
+                import traceback
+
+                traceback.print_exc()
+                logger.exception(f"Failed to load model locally: {model_id}")
+
+                raise 
         
         return _model_cache[model_id]
 
@@ -214,9 +220,12 @@ def generate_batch_with_system_prompt(system_prompt: str, user_prompts: List[str
                 results.append("I apologize, but I couldn't generate a response.")
                 
         except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            results.append("I apologize, but there was an error generating the response.")
-    
+            import traceback
+
+            traceback.print_exc()
+            logger.exception("Generation failed")
+
+            raise
     return results
 
 

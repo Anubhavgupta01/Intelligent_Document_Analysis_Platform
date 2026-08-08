@@ -78,7 +78,7 @@ A full-stack AI-powered research assistant that combines document analysis, conv
 
 ```bash
 git clone <repository-url>
-cd GenAI-Research-Assistant-for-Teams
+cd Intelligent-Document-Analysis-Platform
 ```
 
 ### 2. Set Environment Variables
