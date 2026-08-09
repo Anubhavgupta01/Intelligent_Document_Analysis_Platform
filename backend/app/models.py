@@ -1,15 +1,8 @@
 import os
 import threading
-from typing import Optional, List, Iterator
+from typing import Optional, List
 import logging
-
-try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-    import torch
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    logging.warning("Transformers not available, falling back to mock responses")
+import traceback
 
 _model_lock = threading.Lock()
 _model_cache = {}
@@ -25,10 +18,37 @@ def get_huggingface_token() -> Optional[str]:
     return os.getenv("HUGGINGFACE_HUB_TOKEN")
 
 
+def is_valid_hf_token(token: Optional[str]) -> bool:
+    if not token:
+        return False
+    t = token.strip()
+    if not t or t.startswith("your_") or t == "your_hf_token_here" or not t.startswith("hf_"):
+        return False
+    return True
+
+
+def mask_token(token: Optional[str]) -> str:
+    if not token or not is_valid_hf_token(token):
+        return "(NOT CONFIGURED / PLACEHOLDER)"
+    t = token.strip()
+    return f"{t[:4]}...{t[-4:]} (LOADED)"
+
+
+def log_ai_configuration():
+    token = get_huggingface_token()
+    model_id = get_model_id()
+    logger.info(f"=== AI Service Configuration ===")
+    logger.info(f"Model ID: {model_id}")
+    logger.info(f"Hugging Face Token: {mask_token(token)}")
+    if not is_valid_hf_token(token):
+        logger.warning("WARNING: No valid HUGGINGFACE_HUB_TOKEN found in environment (must start with 'hf_'). API requests will require a valid token.")
+
+
 class MockTokenizer:
     """Mock tokenizer for compatibility with pipeline attributes"""
     def __init__(self):
         self.eos_token_id = 0
+
 
 class HFInferenceAPI:
     """Uses Hugging Face Serverless Inference API for generation"""
@@ -37,12 +57,15 @@ class HFInferenceAPI:
         self.model_id = model_id
         self.token = token
 
-        from huggingface_hub import InferenceClient
-
-        self.client = InferenceClient(
-            model=model_id,
-            token=token
-        )
+        try:
+            from huggingface_hub import InferenceClient
+            self.client = InferenceClient(
+                model=model_id,
+                token=token
+            )
+        except ImportError:
+            logger.error("huggingface_hub library is not installed in the python environment.")
+            raise RuntimeError("huggingface_hub library is not installed in backend environment.")
 
         self.tokenizer = MockTokenizer()
 
@@ -78,104 +101,32 @@ class HFInferenceAPI:
                 })
 
             except Exception as e:
-                import traceback
-
                 traceback.print_exc()
-                logger.exception("HF Inference API failed")
-
-                raise  
+                logger.exception(f"HF Inference API call failed for model '{self.model_id}': {e}")
+                raise
 
         return results
 
+
 def get_text_generation_pipeline():
-    """Get or create the text generation pipeline with Meta LLaMA"""
+    """Get or create the text generation pipeline with Meta LLaMA via Hugging Face API"""
     model_id = get_model_id()
     hf_token = get_huggingface_token()
     
-    # Prefer Hugging Face Serverless Inference API if token is provided
-    use_api = os.getenv("USE_HF_INFERENCE_API", "true").lower() == "true"
-    if use_api and hf_token:
-        with _model_lock:
-            if model_id not in _model_cache:
-                try:
-                    logger.info(f"Using Hugging Face Serverless Inference API for model: {model_id}")
-                    _model_cache[model_id] = HFInferenceAPI(model_id, hf_token)
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    logger.exception("HF Inference API initialization failed")
-                    raise
-            if model_id in _model_cache:
-                return _model_cache[model_id]
-    
-    if not TRANSFORMERS_AVAILABLE:
-        logger.warning("Transformers not available, using mock responses")
-        return MockTextGeneration()
-    
+    if not is_valid_hf_token(hf_token):
+        logger.error(f"Cannot initialize AI model: HUGGINGFACE_HUB_TOKEN is not configured or invalid (token value: '{hf_token}').")
+        raise RuntimeError("Hugging Face API token (HUGGINGFACE_HUB_TOKEN) is not configured in backend/.env. Please set a valid token starting with 'hf_'.")
+
     with _model_lock:
         if model_id not in _model_cache:
             try:
-                logger.info(f"Loading model locally: {model_id}")
-                
-                # Load tokenizer and model
-                tokenizer = AutoTokenizer.from_pretrained(
-                    model_id, 
-                    token=hf_token,
-                    trust_remote_code=True
-                )
-                
-                model = AutoModelForCausalLM.from_pretrained(
-                    model_id,
-                    token=hf_token,
-                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                    device_map="auto" if torch.cuda.is_available() else None,
-                    trust_remote_code=True,
-                    low_cpu_mem_usage=True
-                )
-                
-                # Create pipeline
-                pipe = pipeline(
-                    "text-generation",
-                    model=model,
-                    tokenizer=tokenizer,
-                    max_new_tokens=512,
-                    temperature=0.7,
-                    do_sample=True,
-                    pad_token_id=tokenizer.eos_token_id
-                )
-                
-                _model_cache[model_id] = pipe
-                logger.info(f"Successfully loaded model locally: {model_id}")
-                
+                logger.info(f"Initializing Hugging Face Serverless Inference API for model: {model_id}")
+                _model_cache[model_id] = HFInferenceAPI(model_id, hf_token)
             except Exception as e:
-                import traceback
-
                 traceback.print_exc()
-                logger.exception(f"Failed to load model locally: {model_id}")
-
-                raise 
-        
+                logger.exception(f"HF Inference API initialization failed for model '{model_id}': {e}")
+                raise
         return _model_cache[model_id]
-
-
-
-class MockTextGeneration:
-    """Mock text generation for fallback when models aren't available"""
-    
-    def __call__(self, prompts, **kwargs):
-        if isinstance(prompts, str):
-            prompts = [prompts]
-        return [{"generated_text": self._mock_response(p)} for p in prompts]
-    
-    def _mock_response(self, prompt: str) -> str:
-        responses = [
-            "This is a mock response for testing purposes. Please configure HUGGINGFACE_HUB_TOKEN to use Meta LLaMA.",
-            "Demo mode: The system would normally use Meta LLaMA 3.1-8B-Instruct for this response.",
-            "Mock AI response: Configure the environment variables to enable Meta LLaMA integration.",
-            "Fallback response: The request has been processed successfully in demo mode.",
-        ]
-        import random
-        return random.choice(responses)
 
 
 def format_llama_prompt(system_prompt: str, user_prompt: str) -> str:
@@ -186,17 +137,6 @@ def format_llama_prompt(system_prompt: str, user_prompt: str) -> str:
 def generate_batch_with_system_prompt(system_prompt: str, user_prompts: List[str]) -> List[str]:
     pipe = get_text_generation_pipeline()
     
-    if isinstance(pipe, MockTextGeneration):
-        # Mock responses
-        prompts = [f"{system_prompt}\n{u}" for u in user_prompts]
-        outputs = pipe(prompts)
-        results = []
-        for out in outputs:
-            text = out["generated_text"] if isinstance(out, dict) else out[0]["generated_text"]
-            results.append(text.strip())
-        return results
-    
-    # Real LLaMA model
     results = []
     for user_prompt in user_prompts:
         formatted_prompt = format_llama_prompt(system_prompt, user_prompt)
@@ -207,25 +147,21 @@ def generate_batch_with_system_prompt(system_prompt: str, user_prompts: List[str
                 max_new_tokens=512,
                 temperature=0.7,
                 do_sample=True,
-                return_full_text=False,
-                pad_token_id=pipe.tokenizer.eos_token_id
+                return_full_text=False
             )
             
             if outputs and len(outputs) > 0:
                 generated_text = outputs[0]["generated_text"].strip()
-                # Clean up any remaining special tokens
                 generated_text = generated_text.replace("<|eot_id|>", "").strip()
                 results.append(generated_text)
             else:
-                results.append("I apologize, but I couldn't generate a response.")
+                raise RuntimeError("AI model returned an empty response.")
                 
         except Exception as e:
-            import traceback
-
             traceback.print_exc()
-            logger.exception("Generation failed")
-
+            logger.exception(f"Generation failed for user prompt: {e}")
             raise
+
     return results
 
 
@@ -237,12 +173,7 @@ def generate_chat_response(messages: List[dict], max_new_tokens: int = 512) -> s
     """Generate chat response using conversation history"""
     pipe = get_text_generation_pipeline()
     
-    if isinstance(pipe, MockTextGeneration):
-        return pipe._mock_response("Chat conversation")
-    
-    # Format conversation for LLaMA
     conversation = "<|begin_of_text|>"
-    
     for message in messages:
         role = message["role"]
         content = message["content"]
@@ -254,7 +185,6 @@ def generate_chat_response(messages: List[dict], max_new_tokens: int = 512) -> s
         elif role == "assistant":
             conversation += f"<|start_header_id|>assistant<|end_header_id|>\n\n{content}<|eot_id|>"
     
-    # Add assistant turn
     conversation += "<|start_header_id|>assistant<|end_header_id|>\n\n"
     
     try:
@@ -263,19 +193,19 @@ def generate_chat_response(messages: List[dict], max_new_tokens: int = 512) -> s
             max_new_tokens=max_new_tokens,
             temperature=0.7,
             do_sample=True,
-            return_full_text=False,
-            pad_token_id=pipe.tokenizer.eos_token_id
+            return_full_text=False
         )
         
         if outputs and len(outputs) > 0:
             generated_text = outputs[0]["generated_text"].strip()
-            # Clean up any remaining special tokens
             generated_text = generated_text.replace("<|eot_id|>", "").strip()
             return generated_text
         else:
-            return "I apologize, but I couldn't generate a response."
+            raise RuntimeError("AI model returned an empty chat response.")
             
     except Exception as e:
-        logger.error(f"Error generating chat response: {e}")
-        return "I apologize, but there was an error generating the response."
+        traceback.print_exc()
+        logger.exception(f"Chat generation failed: {e}")
+        raise
+
 

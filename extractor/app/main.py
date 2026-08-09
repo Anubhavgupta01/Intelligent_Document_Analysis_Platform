@@ -34,10 +34,17 @@ async def extract_text_from_pdf_bytes(data: bytes) -> str:
 	reader = PdfReader(BytesIO(data))
 	texts = []
 	for page in reader.pages:
+		t = ""
 		try:
-			texts.append(page.extract_text() or "")
+			t = page.extract_text() or ""
 		except Exception:
-			texts.append("")
+			t = ""
+		if not t.strip():
+			try:
+				t = page.extract_text(extraction_mode="layout") or ""
+			except Exception:
+				t = ""
+		texts.append(t)
 	return "\n".join(texts).strip()
 
 
@@ -47,7 +54,7 @@ async def extract_text_from_url(url: str) -> str:
 		resp.raise_for_status()
 		content_type = resp.headers.get("content-type", "")
 		data = resp.content
-		if "pdf" in content_type or url.lower().endswith(".pdf"):
+		if "pdf" in content_type or url.lower().endswith(".pdf") or b"%PDF-" in data[:1024]:
 			return await extract_text_from_pdf_bytes(data)
 		# HTML fallback
 		soup = BeautifulSoup(data, "html.parser")

@@ -144,6 +144,11 @@ async def get_metrics():
 
 async def check_service_health(service_name: str, service_config: Dict) -> bool:
     """Check if a service is healthy"""
+    if service_name == "llama_service":
+        token = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        if token and token.startswith("hf_"):
+            SERVICES[service_name]["status"] = "healthy (Hugging Face API)"
+            return True
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{service_config['url']}{service_config['health_endpoint']}")
