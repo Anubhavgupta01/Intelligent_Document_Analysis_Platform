@@ -18,6 +18,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, field_validator
 from jose import JWTError, jwt
 import bcrypt
+import sqlite3
+
+from .storage import create_user, get_user_by_email
 
 
 # ── Configuration ─────────────────────────────────────────────
@@ -30,10 +33,7 @@ JWT_EXPIRATION_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", "60"))
 security = HTTPBearer(auto_error=False)
 
 
-# ── In-memory stores ────────────────────────────────────────
-# Keyed by email for unique-email lookups
-USERS_DB: dict[str, dict] = {}
-# Set of blacklisted JWT tokens (for logout)
+# Token revocation is kept in memory for this prototype; user records are persisted in SQLite.
 BLACKLISTED_TOKENS: set[str] = set()
 
 
@@ -148,14 +148,15 @@ async def get_current_user(
     payload = decode_access_token(token)
     email: Optional[str] = payload.get("sub")
 
-    if email is None or email not in USERS_DB:
+    user = get_user_by_email(email or "")
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return USERS_DB[email]
+    return user
 
 
 # ── Auth Router ──────────────────────────────────────────────
@@ -166,25 +167,26 @@ auth_router = APIRouter(prefix="/auth", tags=["Authentication"])
 @auth_router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(request: RegisterRequest):
     """Register a new user account."""
-    # Check for existing email
-    if request.email.lower() in USERS_DB:
+    email = request.email.lower()
+    if get_user_by_email(email) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists",
         )
 
-    # Create user
     user_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    user_data = {
-        "id": user_id,
-        "full_name": request.full_name.strip(),
-        "email": request.email.lower(),
-        "hashed_password": hash_password(request.password),
-        "created_at": now,
-    }
-
-    USERS_DB[request.email.lower()] = user_data
+    try:
+        user_data = create_user(
+            user_id=user_id,
+            email=email,
+            full_name=request.full_name.strip(),
+            hashed_password=hash_password(request.password),
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists",
+        )
 
     # Generate JWT
     access_token = create_access_token(data={"sub": user_data["email"]})
@@ -204,7 +206,7 @@ async def register(request: RegisterRequest):
 async def login(request: LoginRequest):
     """Authenticate a user and return a JWT token."""
     email = request.email.lower()
-    user = USERS_DB.get(email)
+    user = get_user_by_email(email)
 
     if user is None or not verify_password(request.password, user["hashed_password"]):
         raise HTTPException(

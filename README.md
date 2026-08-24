@@ -308,3 +308,39 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **Docker** for containerization platform
 - **FastAPI** for high-performance API framework
 - **React** for modern frontend framework
+
+
+## Resume-Ready Engineering Additions
+
+The platform now stores users, documents, chat sessions, and evaluation records in SQLite. The database path can be configured with `DATABASE_PATH`; Docker Compose mounts `backend/data` so records survive backend restarts. Uploaded documents retain page-aware text so the retrieval pipeline can return source citations with answers.
+
+Document-aware chat responses include page citations, quoted evidence, retrieval relevance, request latency, and a transparent heuristic evidence-overlap score. Signed-in users can open the **Quality** dashboard in the workspace header to review aggregate evaluation metrics for their own requests.
+
+The backend exposes the following additional endpoints:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/documents` | GET | List persisted documents owned by the current user |
+| `/sessions` | GET | Load persisted chat sessions owned by the current user |
+| `/sessions` | POST | Create or update a persisted chat session |
+| `/sessions/{session_id}` | DELETE | Delete a persisted chat session |
+| `/evaluation/summary` | GET | Return aggregate retrieval, evidence-overlap, latency, and citation metrics |
+
+## Testing and CI
+
+Run the backend tests locally with:
+
+```bash
+cd backend
+python -m pytest -q
+```
+
+Build the frontend with:
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+GitHub Actions runs the backend API tests and frontend production build on every push to `main` and every pull request targeting `main`. The evaluation dashboard labels evidence overlap as a heuristic rather than claiming it is a definitive factuality metric.

@@ -3,18 +3,13 @@ import ChatBubble from './components/ChatBubble';
 import LoginPage from './components/LoginPage';
 import RegisterPage from './components/RegisterPage';
 import { useAuth } from './contexts/AuthContext';
-import type { ChatSession } from './types/chat';
+import type { ChatSession, Message } from './types/chat';
 import { getChatsList, saveChatSession, deleteChatSession } from './services/chatStorage';
+import { deleteServerSession, getServerDocuments, getServerSessions, saveServerSession } from './services/serverStorage';
 import { RecentChatsList } from './components/RecentChatsList';
+import EvaluationDashboard from './components/EvaluationDashboard';
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: Date;
-}
 
 interface UploadedDoc {
   id: string;
@@ -22,6 +17,7 @@ interface UploadedDoc {
   type: string;
   size: number;
   uploadDate: Date;
+  characters?: number;
 }
 
 interface Toast {
@@ -106,6 +102,7 @@ function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [evaluationOpen, setEvaluationOpen] = useState(false);
 
   /* ── Toast helpers ───────────────────────────────────────── */
   const addToast = useCallback((message: string, type: Toast['type'] = 'info') => {
@@ -123,10 +120,19 @@ function App() {
   }, []);
 
   /* ── Session management helpers ─────────────────────────── */
-  const loadRecentSessions = useCallback(() => {
-    const list = getChatsList(user?.id);
-    setRecentSessions(list);
-  }, [user?.id]);
+  const loadRecentSessions = useCallback(async () => {
+    if (!user?.id || !token) {
+      setRecentSessions([]);
+      return;
+    }
+    try {
+      const sessions = await getServerSessions(API_URL, token);
+      setRecentSessions(sessions);
+    } catch (error) {
+      console.warn('Could not load server sessions; using local history fallback.', error);
+      setRecentSessions(getChatsList(user.id));
+    }
+  }, [user?.id, token]);
 
   const persistActiveSession = useCallback((
     updatedMessages: Message[],
@@ -180,8 +186,13 @@ function App() {
     };
 
     saveChatSession(sessionToSave);
-    loadRecentSessions();
-  }, [documentId, mode, currentSessionId, uploadedDocs, user?.id, loadRecentSessions]);
+    if (token && user?.id) {
+      void saveServerSession(API_URL, token, sessionToSave).catch((error) => {
+        console.warn('Could not sync chat session to the server.', error);
+      });
+    }
+    void loadRecentSessions();
+  }, [documentId, mode, currentSessionId, uploadedDocs, user?.id, token, loadRecentSessions]);
 
   const handleSelectSession = (session: ChatSession) => {
     setCurrentSessionId(session.id);
@@ -221,14 +232,21 @@ function App() {
     setMobileMenuOpen(false);
   };
 
-  const handleDeleteSession = (id: string) => {
+  const handleDeleteSession = async (id: string) => {
     deleteChatSession(id);
+    if (token) {
+      try {
+        await deleteServerSession(API_URL, token, id);
+      } catch (error) {
+        console.warn('Could not delete server chat session.', error);
+      }
+    }
     if (currentSessionId === id) {
       setCurrentSessionId(null);
       setMessages([]);
       setDocumentId(null);
     }
-    loadRecentSessions();
+    void loadRecentSessions();
     addToast('Chat session deleted', 'info');
   };
 
@@ -239,8 +257,25 @@ function App() {
     setDocumentId(null);
     setCurrentSessionId(null);
     setInput('');
-    loadRecentSessions();
-  }, [user?.id, loadRecentSessions]);
+    void loadRecentSessions();
+
+    if (!token) return;
+    let cancelled = false;
+    getServerDocuments(API_URL, token)
+      .then((documents) => {
+        if (cancelled) return;
+        setUploadedDocs(documents.map((document) => ({
+          id: document.id,
+          name: document.name,
+          type: document.file_type || 'application/octet-stream',
+          size: document.size || 0,
+          characters: document.characters,
+          uploadDate: new Date(document.created_at),
+        })));
+      })
+      .catch((error) => console.warn('Could not load server documents.', error));
+    return () => { cancelled = true; };
+  }, [user?.id, token, loadRecentSessions]);
 
   /* ── Auto‑scroll (unchanged) ─────────────────────────────── */
   useEffect(() => {
@@ -308,7 +343,8 @@ function App() {
         name: file.name,
         type: file.type || 'application/octet-stream',
         size: file.size,
-        uploadDate: new Date()
+        uploadDate: new Date(),
+        characters: data.characters,
       };
       setUploadedDocs(prev => [newDoc, ...prev]);
 
@@ -383,7 +419,8 @@ function App() {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: data.summary || 'No summary available',
-          timestamp: new Date()
+          timestamp: new Date(),
+          citations: data.citations || [],
         };
         const updatedMessages = [...currentMessagesWithUser, assistantMessage];
         setMessages(updatedMessages);
@@ -430,7 +467,9 @@ function App() {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: data.response || 'No response available',
-          timestamp: new Date()
+          timestamp: new Date(),
+          citations: data.citations || [],
+          metrics: data.metrics || null,
         };
         const updatedMessages = [...currentMessagesWithUser, assistantMessage];
         setMessages(updatedMessages);
@@ -739,6 +778,14 @@ function App() {
               <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
               {mode === 'qa' ? 'Q&A Mode' : 'Summarize Mode'}
             </div>
+            <button
+              type="button"
+              onClick={() => setEvaluationOpen(true)}
+              className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700"
+              title="View AI quality metrics"
+            >
+              Quality
+            </button>
             {/* User info */}
             {user && (
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-700/60">
@@ -983,6 +1030,10 @@ function App() {
           </div>
         </div>
       </div>
+
+      {evaluationOpen && token && (
+        <EvaluationDashboard apiUrl={API_URL} token={token} onClose={() => setEvaluationOpen(false)} />
+      )}
 
       {/* ═══════════════════════════════════════════════════════
           TOAST NOTIFICATIONS

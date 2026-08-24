@@ -25,6 +25,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      - DATABASE_PATH=/app/data/idap.db
       - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN}
       - HUGGING_FACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN}
       - MODEL_ID=${MODEL_ID:-meta-llama/Llama-3.1-8B-Instruct}
@@ -36,6 +37,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/app:/app/app
+      - ./backend/data:/app/data
     depends_on:
       - llama_service
       - doc_parser

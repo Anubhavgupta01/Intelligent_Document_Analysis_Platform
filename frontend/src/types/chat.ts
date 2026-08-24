@@ -1,8 +1,22 @@
+export interface Citation {
+  page: number;
+  quote: string;
+  score?: number | null;
+}
+
+export interface ResponseMetrics {
+  latency_ms: number;
+  retrieval_relevance?: number | null;
+  faithfulness?: number | null;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string | Date;
+  citations?: Citation[];
+  metrics?: ResponseMetrics | null;
 }
 
 export interface DocumentRef {
