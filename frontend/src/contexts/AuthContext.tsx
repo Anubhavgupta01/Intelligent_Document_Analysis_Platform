@@ -27,6 +27,23 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_KEY = 'idap_token';
 
+function getApiErrorMessage(data: unknown, fallback: string): string {
+  if (!data || typeof data !== 'object') return fallback;
+
+  const detail = (data as { detail?: unknown }).detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0];
+    if (first && typeof first === 'object' && typeof (first as { msg?: unknown }).msg === 'string') {
+      return (first as { msg: string }).msg.replace(/^Value error,\s*/i, '');
+    }
+    if (typeof first === 'string' && first.trim()) return first;
+  }
+
+  const message = (data as { message?: unknown }).message;
+  return typeof message === 'string' && message.trim() ? message : fallback;
+}
+
 /* ── Provider ────────────────────────────────────────────────── */
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -89,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (!res.ok) {
           const data = await res.json().catch(() => null);
-          return { success: false, error: data?.detail || 'Invalid email or password' };
+          return { success: false, error: getApiErrorMessage(data, 'Invalid email or password') };
         }
 
         const data = await res.json();
@@ -115,16 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         if (!res.ok) {
           const data = await res.json().catch(() => null);
-          // Extract the first validation error message if present
-          let errorMsg = 'Registration failed';
-          if (data?.detail) {
-            if (typeof data.detail === 'string') {
-              errorMsg = data.detail;
-            } else if (Array.isArray(data.detail) && data.detail.length > 0) {
-              errorMsg = data.detail[0]?.msg?.replace('Value error, ', '') || errorMsg;
-            }
-          }
-          return { success: false, error: errorMsg };
+          return { success: false, error: getApiErrorMessage(data, 'Registration failed') };
         }
 
         const data = await res.json();
