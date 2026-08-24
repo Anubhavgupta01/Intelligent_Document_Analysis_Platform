@@ -398,6 +398,7 @@ function App() {
 
         const chatRequest = {
           message: userMessage.content,
+          document_id: documentId,
           history: chatHistory
         };
 
